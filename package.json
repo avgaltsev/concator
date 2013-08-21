@@ -1,0 +1,14 @@
+{
+	"name": "concator",
+	"version": "0.0.1",
+	"author": "Anton Galtsev <avgaltsev@gmail.com> (http://avgatlsev.ru)",
+	"description": "File concatenation tool.",
+	"main": "./concator.js",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/avgaltsev/concator.git"
+	},
+	"engines": {
+		"node": "*"
+	}
+}

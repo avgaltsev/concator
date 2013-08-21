@@ -1,47 +1,62 @@
 var fs = require("fs");
 
-var uglifyjs = require("uglify-js");
 
-
-function includeFile(path, patternRegexps, callback) {
+function processPatterns(path, patterns) {
 	
-	var exclude = false;
+	var result = [];
 	
-	patternRegexps.excludes.forEach(function(patternRegexpsExclude) {
+	var starReplacement = "asd";
+	
+	patterns.forEach(function(pattern) {
 		
-		exclude = exclude || patternRegexpsExclude.test(path);
+		var include = (pattern[0] !== "!");
+		
+		include || (pattern = pattern.slice(1));
+		
+		pattern = pattern.replace(/\./g, "\\.").replace(/\*/g, starReplacement).replace(new RegExp(starReplacement + starReplacement, "g"), ".*").replace(new RegExp(starReplacement, "g"), "[^\/]*");
+		
+		pattern = "^" + path.replace(/\./g, "\\.") + "/" + pattern + "$";
+		
+		result.push({
+			regexp: new RegExp(pattern),
+			include: include
+		});
 		
 	});
 	
-	if (exclude) {
-		callback(false);
-		return;
-	}
-	
-	var include = false;
-	var key = "";
-	
-	patternRegexps.includes.forEach(function(patternRegexpsInclude) {
-		
-		if (!include && patternRegexpsInclude.test(path)) {
-			include = true;
-			key = patternRegexpsInclude.toString();
-		}
-		
-	});
-	
-	if (include) {
-		callback(true, key);
-	} else {
-		callback(false);
-	}
+	return result;
 	
 }
 
 
-function walk(path, patternRegexps, callback) {
+function includeFile(path, patterns) {
+	
+	var result = false;
+	
+	patterns.forEach(function(pattern) {
+		
+		result = pattern.include ?
+			(result || (pattern.regexp.test(path) && pattern.regexp.toString())) :
+			(result && !pattern.regexp.test(path) && result);
+		
+	});
+	
+	return result;
+	
+}
+
+
+function walk(path, patterns, callback) {
 	
 	var result = {};
+	
+	patterns.forEach(function(pattern) {
+		
+		if (pattern.include) {
+			result[pattern.regexp.toString()] = [];
+		}
+		
+	});
 	
 	fs.readdir(path, function(error, files) {
 		
@@ -57,16 +72,10 @@ function walk(path, patternRegexps, callback) {
 					
 					if (stats.isDirectory()) {
 						
-						walk(file, patternRegexps, function(files) {
+						walk(file, patterns, function(files) {
 							
 							for (var key in files) {
-								
-								if (result[key]) {
-									result[key] = result[key].concat(files[key]);
-								} else {
-									result[key] = files[key];
-								}
-								
+								result[key] = result[key].concat(files[key]);
 							}
 							
 							if (!--queueLength) {
@@ -77,23 +86,15 @@ function walk(path, patternRegexps, callback) {
 						
 					} else {
 						
-						includeFile(file, patternRegexps, function(include, key) {
-							
-							if (include) {
-								
-								if (result[key]) {
-									result[key].push(file);
-								} else {
-									result[key] = [file];
-								}
-								
-							}
-							
-							if (!--queueLength) {
-								callback(result);
-							}
-							
-						});
+						var key = includeFile(file, patterns);
+						
+						if (key) {
+							result[key].push(file);
+						}
+						
+						if (!--queueLength) {
+							callback(result);
+						}
 						
 					}
 					
@@ -118,88 +119,56 @@ function walk(path, patternRegexps, callback) {
 }
 
 
-function compress(input) {
-	
-	var ast = uglifyjs.parser.parse(input);
-	
-	ast = uglifyjs.uglify.ast_mangle(ast);
-	ast = uglifyjs.uglify.ast_squeeze(ast);
-	
-	return uglifyjs.uglify.gen_code(ast);
-	
-}
-
-
-exports.build = function(path, patterns, output) {
+exports.concatenate = function(path, patterns, callback) {
 	
 	var cwd = process.cwd();
 	
-	path = fs.realpathSync(cwd + "/" + path);
-	
-	var patternRegexps = {
-		excludes: [],
-		includes: []
-	};
-	
-	var starReplacement = "asd";
-	
-	patterns.forEach(function(pattern) {
+	fs.realpath(cwd + "/" + path, {}, function(err, resolvedPath) {
 		
-		var regexps,
-			regexp;
-		
-		if (pattern[0] === "!") {
-			regexps = patternRegexps.excludes;
-			pattern = pattern.slice(1);
-		} else {
-			regexps = patternRegexps.includes;
+		if (err) {
+			callback(err);
+			return;
 		}
 		
-		pattern = pattern.replace(/\./g, "\\.").replace(/\*/g, starReplacement).replace(new RegExp(starReplacement + starReplacement, "g"), ".*").replace(new RegExp(starReplacement, "g"), "[^\/]*");
-		
-		//if (pattern[0] === "/") {
-			pattern = "^" + path.replace(/\./g, "\\.") + "/" + pattern + "$";
-			//regexp = new RegExp((path + pattern).replace(/\./g, "\\.").replace(/\*\*/g, ".*").replace(/\*/g, "[^\/]*"));
-		//} else {
-		//	pattern = "^" + path.replace(/\./g, "\\.") + "/.*/" + pattern + "$";
-			//regexp = new RegExp(".*" + pattern.replace(/\./g, "\\.").replace(/\*\*/g, ".*").replace(/\*/g, "[^\/]*"));
-		//}
-		
-		regexp = new RegExp(pattern);
-		
-		regexps.push(regexp);
-		
-	});
-	
-	//console.log(patternRegexps);
-	
-	walk(path, patternRegexps, function(files) {
-		
-		var compiled = "";
-		
-		for (var section in files) {
+		walk(resolvedPath, processPatterns(resolvedPath, patterns), function(files) {
 			
-			for (var file in files[section]) {
+			var list = [];
+			var output = "";
+			
+			for (var section in files) {
 				
-				compiled += fs.readFileSync(files[section][file]);
+				for (var file in files[section]) {
+					
+					list.push(files[section][file]);
+					output += fs.readFileSync(files[section][file]);
+					
+				}
 				
 			}
 			
-		}
-		
-		var outputStream = fs.createWriteStream(output, {
-			flags: "w",
-			encoding: "utf8",
-			mode: 0644
+			if (typeof callback === "string") {
+				
+				var outputStream = fs.createWriteStream(callback, {
+					flags: "w",
+					encoding: "utf8",
+					mode: 0644
+				});
+				
+				outputStream.on("error", function(e) {
+					console.log(e);
+				});
+				
+				outputStream.write(output);
+				
+				outputStream.end();
+				
+			} else {
+				
+				callback(undefined, list, output);
+				
+			}
+			
 		});
-		
-		outputStream.on("error", function(e) {
-			console.log(e);
-		});
-		
-		outputStream.write(compress(compiled));
-		
-		outputStream.end();
 		
 	});
 	
